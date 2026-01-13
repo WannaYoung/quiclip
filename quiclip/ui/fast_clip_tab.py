@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+"""“快速剪辑”Tab 的 Gradio UI。
+
+在同一视频上选择多个区间，批量裁剪后按顺序合并输出。
+"""
+
 import os
 import tempfile
 import time
@@ -25,6 +30,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
     media_root_abs = os.path.abspath(config.media_root)
 
     def _resolve_selected_path(path_value: str | None) -> str | None:
+        """校验并解析 FileExplorer 选择的路径，返回绝对路径。"""
         if not path_value:
             return None
         full = os.path.abspath(path_value)
@@ -37,6 +43,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         return full
 
     def _safe_dir(path_value: str | None) -> str:
+        """将输出目录限制在媒体根目录内，避免目录穿越。"""
         if not path_value:
             return media_root_abs
         full = os.path.abspath(path_value)
@@ -50,6 +57,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         return media_root_abs
 
     def _normalize_selected_file(path_value: str | None) -> str:
+        """将选择结果标准化为 Textbox 可展示的路径字符串。"""
         resolved = _resolve_selected_path(path_value)
         return resolved or ""
 
@@ -83,7 +91,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         """
     )
 
-    gr.Markdown("## 1) 选择服务器端视频文件")
+    gr.Markdown("## 1) 选择文件")
     file_explorer = gr.FileExplorer(
         label="视频文件",
         root_dir=media_root_abs,
@@ -92,7 +100,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         ignore_glob="**/.*",
         height=240,
     )
-    selected_file_path = gr.Textbox(label="文件完整路径", interactive=False, value="")
+    selected_file_path = gr.Textbox(label="完整路径", interactive=False, value="")
     load_btn = gr.Button("加载视频")
 
     gr.Markdown("## 预览")
@@ -102,7 +110,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
 
     meta_text = gr.Markdown("")
 
-    gr.Markdown("## 2) 选择截取区间")
+    gr.Markdown("## 2) 视频截取")
     if ExternalRangeSlider is not None:
         range_slider = ExternalRangeSlider(label="截取区间（秒）", minimum=0, maximum=1, value=(0, 1))
         start_slider = None
@@ -113,7 +121,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         end_slider = gr.Slider(label="结束时间（秒）", minimum=0, maximum=1, value=1, step=0.1)
     add_btn = gr.Button("添加到列表")
 
-    gr.Markdown("## 3) 待剪辑合并区间列表（可删除/调整顺序）")
+    gr.Markdown("## 3) 待合并区间列表")
 
     with gr.Row():
         segments_df = gr.Dataframe(
@@ -133,10 +141,10 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         del_btn = gr.Button("删除")
         clear_btn = gr.Button("清空列表")
 
-    gr.Markdown("## 4) 快速剪辑合并")
+    gr.Markdown("## 4) 剪辑合并")
     with gr.Row():
         selected_output_dir = gr.Textbox(label="输出目录", interactive=True, value=media_root_abs)
-        run_btn = gr.Button("快速剪辑合并")
+        run_btn = gr.Button("剪辑合并")
 
     output_video = gr.Video(label="输出预览")
     status_text = gr.Markdown("")

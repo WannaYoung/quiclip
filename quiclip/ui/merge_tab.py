@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+"""“视频合并”Tab 的 Gradio UI。
+
+选择服务器端视频文件并按顺序 concat 合并。
+"""
+
 import os
 from typing import Any, Dict, List
 
@@ -18,6 +23,7 @@ def build_merge_tab(config: AppConfig) -> None:
     media_root_abs = os.path.abspath(config.media_root)
 
     def _resolve_selected_path(path_value: str | None) -> str | None:
+        """校验并解析 FileExplorer 选择的路径，返回绝对路径。"""
         if not path_value:
             return None
         full = os.path.abspath(path_value)
@@ -30,6 +36,7 @@ def build_merge_tab(config: AppConfig) -> None:
         return full
 
     def _safe_dir(path_value: str | None) -> str:
+        """将输出目录限制在媒体根目录内，避免目录穿越。"""
         if not path_value:
             return media_root_abs
         full = os.path.abspath(path_value)
@@ -47,6 +54,7 @@ def build_merge_tab(config: AppConfig) -> None:
         return resolved or ""
 
     def _videos_to_rows(videos: List[Dict[str, Any]]):
+        """将内部 videos 状态转换为 Dataframe 行。"""
         rows: List[List[Any]] = []
         for i, v in enumerate(videos, start=1):
             try:
@@ -56,7 +64,7 @@ def build_merge_tab(config: AppConfig) -> None:
             rows.append([i, rel_label])
         return rows
 
-    gr.Markdown("## 1) 选择服务器端视频文件")
+    gr.Markdown("## 1) 选择文件")
     file_explorer = gr.FileExplorer(
         label="视频文件",
         root_dir=media_root_abs,
@@ -65,10 +73,10 @@ def build_merge_tab(config: AppConfig) -> None:
         ignore_glob="**/.*",
         height=240,
     )
-    selected_file_path = gr.Textbox(label="文件完整路径", interactive=False, value="")
-    add_btn = gr.Button("添加到合并列表")
+    selected_file_path = gr.Textbox(label="完整路径", interactive=False, value="")
+    add_btn = gr.Button("添加到列表")
 
-    gr.Markdown("## 2) 合并列表（可删除/调整顺序）")
+    gr.Markdown("## 2) 合并列表")
     with gr.Row():
         videos_df = gr.Dataframe(
             headers=["序号", "文件"],
@@ -132,6 +140,7 @@ def build_merge_tab(config: AppConfig) -> None:
         return [], []
 
     def _run(videos: List[Dict[str, Any]], out_dir_value: str | None):
+        """执行合并并返回（输出视频路径, 状态文案）。"""
         try:
             paths = [v["path"] for v in videos]
             out_dir = _safe_dir(out_dir_value)

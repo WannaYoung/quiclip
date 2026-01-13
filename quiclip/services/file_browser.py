@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+"""服务器端文件浏览。
+
+用于在媒体根目录下选择视频文件，不涉及本机上传。
+"""
+
 import os
 from dataclasses import dataclass
 from typing import List
@@ -10,6 +15,8 @@ VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".m4v", ".avi", ".ts", ".wmv"}
 
 @dataclass(frozen=True)
 class FileItem:
+    """文件条目（用于 UI 展示与实际路径）。"""
+
     label: str
     path: str
 

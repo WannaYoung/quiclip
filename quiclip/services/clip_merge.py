@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+"""剪辑区间与视频合并的业务封装。"""
+
 import os
 import tempfile
 import time
@@ -10,6 +12,8 @@ from quiclip.services.ffmpeg_utils import fast_concat_mp4, fast_trim_to_mp4
 
 @dataclass(frozen=True)
 class ClipSegment:
+    """一个剪辑区间（同一输入文件上的时间段）。"""
+
     input_path: str
     start_sec: float
     end_sec: float

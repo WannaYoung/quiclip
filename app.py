@@ -1,3 +1,8 @@
+"""Gradio 应用入口。
+ 
+ 提供两个功能 Tab：快速剪辑合并、视频合并。
+ """
+ 
 import os
 
 import gradio as gr
@@ -8,10 +13,11 @@ from quiclip.ui.merge_tab import build_merge_tab
 
 
 def build_app() -> gr.Blocks:
+    """构建 Gradio UI 并返回 Blocks 实例。"""
     config = AppConfig.from_env()
 
     with gr.Blocks(title="QuiClip") as demo:
-        gr.Markdown("# QuiClip\n\n一个简洁的服务器端视频快速剪辑与合并工具（基于 ffmpeg，无重编码）。")
+        gr.Markdown("# QuiClip\n\n一个简洁的服务器端视频快速剪辑与合并工具。")
         gr.Markdown(
             f"**媒体根目录**：`{config.media_root}`"
         )

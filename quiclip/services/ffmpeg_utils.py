@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+"""ffmpeg/ffprobe 相关工具封装。
+
+仅提供本项目所需的最小能力：读取时长、裁剪、合并。
+"""
+
 import json
 import os
 import subprocess
@@ -7,15 +12,18 @@ from dataclasses import dataclass
 
 
 class FfmpegError(RuntimeError):
-    pass
+    """ffmpeg/ffprobe 调用失败。"""
 
 
 @dataclass(frozen=True)
 class VideoMeta:
+    """视频元信息（当前仅包含时长）。"""
+
     duration_seconds: float
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess:
+    """运行子进程并返回结果（不抛异常，由调用方检查 returncode）。"""
     return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
