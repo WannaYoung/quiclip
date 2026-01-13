@@ -27,6 +27,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
     """构建“快速剪辑”Tab。"""
 
     state_segments = gr.State([])  # List[Dict]
+    state_selected = gr.State(None)  # 1-based index
     media_root_abs = os.path.abspath(config.media_root)
 
     def _resolve_selected_path(path_value: str | None) -> str | None:
@@ -135,7 +136,6 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         )
 
     with gr.Row():
-        idx_box = gr.Number(label="操作序号（1 开始）", value=1, precision=0)
         up_btn = gr.Button("上移")
         down_btn = gr.Button("下移")
         del_btn = gr.Button("删除")
@@ -238,37 +238,52 @@ def build_fast_clip_tab(config: AppConfig) -> None:
             rows.append([i, rel_label, float(s["start_sec"]), float(s["end_sec"])])
         return rows
 
-    def _add_segment(path_value: str | None, start_sec: float, end_sec: float, segments: List[Dict[str, Any]]):
+    def _add_segment(
+        path_value: str | None,
+        start_sec: float,
+        end_sec: float,
+        segments: List[Dict[str, Any]],
+        selected: int | None,
+    ):
         path = _resolve_selected_path(path_value)
         if not path:
-            return segments, _segments_to_rows(segments)
+            return segments, _segments_to_rows(segments), selected
 
         start, end = float(start_sec), float(end_sec)
         if end <= start:
-            return segments, _segments_to_rows(segments)
+            return segments, _segments_to_rows(segments), selected
         segments = list(segments)
         segments.append({"label": os.path.basename(path), "path": path, "start_sec": start, "end_sec": end})
-        return segments, _segments_to_rows(segments)
+        new_selected = len(segments)
+        return segments, _segments_to_rows(segments), new_selected
 
-    def _move(segments: List[Dict[str, Any]], idx: float, direction: int):
+    def _move(segments: List[Dict[str, Any]], selected: int | None, direction: int):
         segments = list(segments)
-        i = int(idx) - 1
+        if selected is None:
+            return segments, _segments_to_rows(segments), None
+        i = int(selected) - 1
         j = i + direction
         if i < 0 or i >= len(segments) or j < 0 or j >= len(segments):
-            return segments, _segments_to_rows(segments)
+            return segments, _segments_to_rows(segments), selected
         segments[i], segments[j] = segments[j], segments[i]
-        return segments, _segments_to_rows(segments)
+        return segments, _segments_to_rows(segments), j + 1
 
-    def _delete(segments: List[Dict[str, Any]], idx: float):
+    def _delete(segments: List[Dict[str, Any]], selected: int | None):
         segments = list(segments)
-        i = int(idx) - 1
+        if selected is None:
+            return segments, _segments_to_rows(segments), None
+        i = int(selected) - 1
         if i < 0 or i >= len(segments):
-            return segments, _segments_to_rows(segments)
+            return segments, _segments_to_rows(segments), selected
         segments.pop(i)
-        return segments, _segments_to_rows(segments)
+        if not segments:
+            new_selected = None
+        else:
+            new_selected = min(i + 1, len(segments))
+        return segments, _segments_to_rows(segments), new_selected
 
     def _clear():
-        return [], []
+        return [], [], None
 
     def _run(segments: List[Dict[str, Any]], out_dir_value: str | None):
         try:
@@ -307,13 +322,18 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         else:
             range_slider.change(_preview_from_range, inputs=[selected_file_path, range_slider], outputs=[video_preview])
 
-        def _add_from_range(path_value: str | None, r: Tuple[float, float], segments: List[Dict[str, Any]]):
-            return _add_segment(path_value, float(r[0]), float(r[1]), segments)
+        def _add_from_range(
+            path_value: str | None,
+            r: Tuple[float, float],
+            segments: List[Dict[str, Any]],
+            selected: int | None,
+        ):
+            return _add_segment(path_value, float(r[0]), float(r[1]), segments, selected)
 
         add_btn.click(
             _add_from_range,
-            inputs=[selected_file_path, range_slider, state_segments],
-            outputs=[state_segments, segments_df],
+            inputs=[selected_file_path, range_slider, state_segments, state_selected],
+            outputs=[state_segments, segments_df, state_selected],
         )
     else:
         file_explorer.change(_normalize_selected_file, inputs=[file_explorer], outputs=[selected_file_path])
@@ -346,8 +366,8 @@ def build_fast_clip_tab(config: AppConfig) -> None:
 
         add_btn.click(
             _add_segment,
-            inputs=[selected_file_path, start_slider, end_slider, state_segments],
-            outputs=[state_segments, segments_df],
+            inputs=[selected_file_path, start_slider, end_slider, state_segments, state_selected],
+            outputs=[state_segments, segments_df, state_selected],
         )
 
     def _select_row(evt: gr.SelectData):
@@ -356,11 +376,11 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         except Exception:  # noqa: BLE001
             return 1
 
-    segments_df.select(_select_row, inputs=None, outputs=[idx_box])
+    segments_df.select(_select_row, inputs=None, outputs=[state_selected])
 
-    up_btn.click(lambda segs, idx: _move(segs, idx, -1), inputs=[state_segments, idx_box], outputs=[state_segments, segments_df])
-    down_btn.click(lambda segs, idx: _move(segs, idx, 1), inputs=[state_segments, idx_box], outputs=[state_segments, segments_df])
-    del_btn.click(_delete, inputs=[state_segments, idx_box], outputs=[state_segments, segments_df])
-    clear_btn.click(_clear, outputs=[state_segments, segments_df])
+    up_btn.click(lambda segs, sel: _move(segs, sel, -1), inputs=[state_segments, state_selected], outputs=[state_segments, segments_df, state_selected])
+    down_btn.click(lambda segs, sel: _move(segs, sel, 1), inputs=[state_segments, state_selected], outputs=[state_segments, segments_df, state_selected])
+    del_btn.click(_delete, inputs=[state_segments, state_selected], outputs=[state_segments, segments_df, state_selected])
+    clear_btn.click(_clear, outputs=[state_segments, segments_df, state_selected])
 
     run_btn.click(_run, inputs=[state_segments, selected_output_dir], outputs=[output_video, status_text])
