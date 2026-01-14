@@ -9,7 +9,7 @@ import os
 import subprocess
 import tempfile
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 import gradio as gr
 
@@ -29,6 +29,7 @@ def build_fast_clip_tab(config: AppConfig) -> None:
 
     state_segments = gr.State([])  # List[Dict]
     state_selected = gr.State(None)  # 1-based index
+    state_duration = gr.State(0.0)
     media_root_abs = os.path.abspath(config.media_root)
     max_inline_preview_mb = os.environ.get("QUICLIP_MAX_INLINE_PREVIEW_MB", "50").strip()
     try:
@@ -152,15 +153,16 @@ def build_fast_clip_tab(config: AppConfig) -> None:
     meta_text = gr.Markdown("")
 
     gr.Markdown("## 2) 视频截取")
-    if ExternalRangeSlider is not None:
-        range_slider = ExternalRangeSlider(label="截取区间（秒）", minimum=0, maximum=1, value=(0, 1))
-        start_slider = None
-        end_slider = None
-    else:
-        range_slider = None
-        start_slider = gr.Slider(label="开始时间（秒）", minimum=0, maximum=1, value=0, step=0.1)
-        end_slider = gr.Slider(label="结束时间（秒）", minimum=0, maximum=1, value=1, step=0.1)
-    add_btn = gr.Button("添加到列表")
+    current_time_slider = gr.Slider(label="当前时间（秒）", minimum=0, maximum=1, value=0, step=0.1)
+
+    with gr.Row():
+        start_input = gr.Number(label="起始时间（秒）", value=None, precision=2)
+        set_start_btn = gr.Button("设为起始")
+    with gr.Row():
+        end_input = gr.Number(label="终止时间（秒）", value=None, precision=2)
+        set_end_btn = gr.Button("设为终止")
+
+    add_btn = gr.Button("添加到列表", interactive=False)
 
     gr.Markdown("## 3) 待合并区间列表")
 
@@ -240,12 +242,12 @@ def build_fast_clip_tab(config: AppConfig) -> None:
     def _load_video_for_range(path_value: str | None, out_dir_value: str | None):
         path = _resolve_selected_path(path_value)
         if not path:
-            return None, "**提示**：请选择有效的视频文件。", gr.update(), _safe_dir(out_dir_value)
+            return None, "**提示**：请选择有效的视频文件。", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), _safe_dir(out_dir_value)
 
         try:
             meta = probe_video_meta(path)
         except Exception as e:  # noqa: BLE001
-            return None, f"**错误**：读取视频信息失败：{e}", gr.update(), _safe_dir(out_dir_value)
+            return None, f"**错误**：读取视频信息失败：{e}", gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), _safe_dir(out_dir_value)
 
         rel_label = os.path.relpath(path, media_root_abs)
         size_bytes = _get_file_size(path)
@@ -257,8 +259,93 @@ def build_fast_clip_tab(config: AppConfig) -> None:
             f"**预览**：{preview_mode}"
         )
         max_v = max(meta.duration_seconds, 0.1)
-        range_update = gr.update(minimum=0, maximum=max_v, value=(0, min(meta.duration_seconds, 5.0)))
-        return video_value, md, range_update, _safe_dir(os.path.dirname(path))
+        slider_update = gr.update(minimum=0, maximum=max_v, value=0)
+        add_update = gr.update(interactive=False)
+        return (
+            video_value,
+            md,
+            slider_update,
+            meta.duration_seconds,
+            gr.update(value=None),
+            gr.update(value=None),
+            add_update,
+            _safe_dir(os.path.dirname(path)),
+        )
+
+    def _format_current_time(t: float | None) -> str:
+        try:
+            v = float(t or 0.0)
+        except Exception:  # noqa: BLE001
+            v = 0.0
+        return f"当前时间（秒）：{v:.2f}"
+
+    def _preview_from_time(path_value: str | None, t: float, duration_seconds: float):
+        path = _resolve_selected_path(path_value)
+        if not path:
+            return gr.update()
+        try:
+            tt = max(float(t), 0.0)
+        except Exception:  # noqa: BLE001
+            tt = 0.0
+        try:
+            dur = float(duration_seconds or 0.0)
+        except Exception:  # noqa: BLE001
+            dur = 0.0
+        end = tt + 3.0
+        if dur > 0:
+            end = min(end, dur)
+        preview = _make_preview_clip(path, tt, end)
+        return preview
+
+    def _can_add(start_sec: float | None, end_sec: float | None, duration_seconds: float) -> bool:
+        try:
+            if start_sec is None or end_sec is None:
+                return False
+            s = float(start_sec)
+            e = float(end_sec)
+            d = float(duration_seconds or 0.0)
+        except Exception:  # noqa: BLE001
+            return False
+        if e <= s:
+            return False
+        if d > 0 and e >= d:
+            return False
+        return True
+
+    def _update_add_btn(start_sec: float | None, end_sec: float | None, duration_seconds: float):
+        return gr.update(interactive=_can_add(start_sec, end_sec, duration_seconds))
+
+    def _set_start_from_current(current_t: float, end_sec: float | None):
+        try:
+            ct = float(current_t)
+        except Exception:  # noqa: BLE001
+            return gr.update()
+        if end_sec is not None:
+            try:
+                if ct >= float(end_sec):
+                    return gr.update()
+            except Exception:  # noqa: BLE001
+                return gr.update()
+        return gr.update(value=ct)
+
+    def _set_end_from_current(current_t: float, start_sec: float | None, duration_seconds: float):
+        try:
+            ct = float(current_t)
+        except Exception:  # noqa: BLE001
+            return gr.update()
+        if start_sec is not None:
+            try:
+                if ct <= float(start_sec):
+                    return gr.update()
+            except Exception:  # noqa: BLE001
+                return gr.update()
+        try:
+            d = float(duration_seconds or 0.0)
+        except Exception:  # noqa: BLE001
+            d = 0.0
+        if d > 0 and ct >= d:
+            return gr.update()
+        return gr.update(value=ct)
 
     def _load_video_for_sliders(path_value: str | None, out_dir_value: str | None):
         path = _resolve_selected_path(path_value)
@@ -311,7 +398,12 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         if not path:
             return segments, _segments_to_rows(segments), selected
 
-        start, end = float(start_sec), float(end_sec)
+        try:
+            if start_sec is None or end_sec is None:
+                return segments, _segments_to_rows(segments), selected
+            start, end = float(start_sec), float(end_sec)
+        except Exception:  # noqa: BLE001
+            return segments, _segments_to_rows(segments), selected
         if end <= start:
             return segments, _segments_to_rows(segments), selected
         segments = list(segments)
@@ -361,76 +453,48 @@ def build_fast_clip_tab(config: AppConfig) -> None:
         except Exception as e:  # noqa: BLE001
             return None, f"**未知错误**：{e}"
 
-    if range_slider is not None:
-        file_explorer.change(_normalize_selected_file, inputs=[file_explorer], outputs=[selected_file_path])
-        file_explorer.change(_default_out_dir_from_file, inputs=[file_explorer], outputs=[selected_output_dir])
+    file_explorer.change(_normalize_selected_file, inputs=[file_explorer], outputs=[selected_file_path])
+    file_explorer.change(_default_out_dir_from_file, inputs=[file_explorer], outputs=[selected_output_dir])
 
-        load_btn.click(
-            _load_video_for_range,
-            inputs=[selected_file_path, selected_output_dir],
-            outputs=[video_preview, meta_text, range_slider, selected_output_dir],
-        )
+    load_btn.click(
+        _load_video_for_range,
+        inputs=[selected_file_path, selected_output_dir],
+        outputs=[video_preview, meta_text, current_time_slider, state_duration, start_input, end_input, add_btn, selected_output_dir],
+    )
 
-        def _preview_from_range(path_value: str | None, r: Tuple[float, float]):
-            path = _resolve_selected_path(path_value)
-            if not path:
-                return gr.update()
-            preview = _make_preview_clip(path, float(r[0]), float(r[1]))
-            return preview
+    current_time_slider.change(
+        _preview_from_time,
+        inputs=[selected_file_path, current_time_slider, state_duration],
+        outputs=[video_preview],
+    )
 
-        release_fn = getattr(range_slider, "release", None)
-        if callable(release_fn):
-            release_fn(_preview_from_range, inputs=[selected_file_path, range_slider], outputs=[video_preview])
-        else:
-            range_slider.change(_preview_from_range, inputs=[selected_file_path, range_slider], outputs=[video_preview])
+    set_start_btn.click(
+        _set_start_from_current,
+        inputs=[current_time_slider, end_input],
+        outputs=[start_input],
+    ).then(
+        _update_add_btn,
+        inputs=[start_input, end_input, state_duration],
+        outputs=[add_btn],
+    )
+    set_end_btn.click(
+        _set_end_from_current,
+        inputs=[current_time_slider, start_input, state_duration],
+        outputs=[end_input],
+    ).then(
+        _update_add_btn,
+        inputs=[start_input, end_input, state_duration],
+        outputs=[add_btn],
+    )
 
-        def _add_from_range(
-            path_value: str | None,
-            r: Tuple[float, float],
-            segments: List[Dict[str, Any]],
-            selected: int | None,
-        ):
-            return _add_segment(path_value, float(r[0]), float(r[1]), segments, selected)
+    start_input.change(_update_add_btn, inputs=[start_input, end_input, state_duration], outputs=[add_btn])
+    end_input.change(_update_add_btn, inputs=[start_input, end_input, state_duration], outputs=[add_btn])
 
-        add_btn.click(
-            _add_from_range,
-            inputs=[selected_file_path, range_slider, state_segments, state_selected],
-            outputs=[state_segments, segments_df, state_selected],
-        )
-    else:
-        file_explorer.change(_normalize_selected_file, inputs=[file_explorer], outputs=[selected_file_path])
-        file_explorer.change(_default_out_dir_from_file, inputs=[file_explorer], outputs=[selected_output_dir])
-
-        load_btn.click(
-            _load_video_for_sliders,
-            inputs=[selected_file_path, selected_output_dir],
-            outputs=[video_preview, meta_text, start_slider, end_slider, selected_output_dir],
-        )
-
-        def _preview_from_sliders(path_value: str | None, start_sec: float, end_sec: float):
-            path = _resolve_selected_path(path_value)
-            if not path:
-                return gr.update()
-            preview = _make_preview_clip(path, float(start_sec), float(end_sec))
-            return preview
-
-        release_start = getattr(start_slider, "release", None)
-        release_end = getattr(end_slider, "release", None)
-        if callable(release_start):
-            release_start(_preview_from_sliders, inputs=[selected_file_path, start_slider, end_slider], outputs=[video_preview])
-        else:
-            start_slider.change(_preview_from_sliders, inputs=[selected_file_path, start_slider, end_slider], outputs=[video_preview])
-
-        if callable(release_end):
-            release_end(_preview_from_sliders, inputs=[selected_file_path, start_slider, end_slider], outputs=[video_preview])
-        else:
-            end_slider.change(_preview_from_sliders, inputs=[selected_file_path, start_slider, end_slider], outputs=[video_preview])
-
-        add_btn.click(
-            _add_segment,
-            inputs=[selected_file_path, start_slider, end_slider, state_segments, state_selected],
-            outputs=[state_segments, segments_df, state_selected],
-        )
+    add_btn.click(
+        _add_segment,
+        inputs=[selected_file_path, start_input, end_input, state_segments, state_selected],
+        outputs=[state_segments, segments_df, state_selected],
+    )
 
     def _select_row(evt: gr.SelectData):
         try:
