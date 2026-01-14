@@ -20,6 +20,7 @@ def build_merge_tab(config: AppConfig) -> None:
     """构建“视频合并”Tab。"""
 
     state_videos = gr.State([])  # List[Dict]
+    state_selected = gr.State(None)  # 1-based index
     media_root_abs = os.path.abspath(config.media_root)
 
     def _resolve_selected_path(path_value: str | None) -> str | None:
@@ -89,7 +90,6 @@ def build_merge_tab(config: AppConfig) -> None:
         )
 
     with gr.Row():
-        idx_box = gr.Number(label="操作序号（1 开始）", value=1, precision=0)
         up_btn = gr.Button("上移")
         down_btn = gr.Button("下移")
         del_btn = gr.Button("删除")
@@ -112,32 +112,40 @@ def build_merge_tab(config: AppConfig) -> None:
     def _add(path_value: str | None, videos: List[Dict[str, Any]]):
         path = _resolve_selected_path(path_value)
         if not path:
-            return videos, _videos_to_rows(videos), media_root_abs
+            return videos, _videos_to_rows(videos), media_root_abs, None
 
         videos = list(videos)
         if not any(v.get("path") == path for v in videos):
             videos.append({"label": os.path.basename(path), "path": path})
-        return videos, _videos_to_rows(videos), _safe_dir(os.path.dirname(path))
+        return videos, _videos_to_rows(videos), _safe_dir(os.path.dirname(path)), len(videos)
 
-    def _move(videos: List[Dict[str, Any]], idx: float, direction: int):
+    def _move(videos: List[Dict[str, Any]], selected: int | None, direction: int):
         videos = list(videos)
-        i = int(idx) - 1
+        if selected is None:
+            return videos, _videos_to_rows(videos), None
+        i = int(selected) - 1
         j = i + direction
         if i < 0 or i >= len(videos) or j < 0 or j >= len(videos):
-            return videos, _videos_to_rows(videos)
+            return videos, _videos_to_rows(videos), selected
         videos[i], videos[j] = videos[j], videos[i]
-        return videos, _videos_to_rows(videos)
+        return videos, _videos_to_rows(videos), j + 1
 
-    def _delete(videos: List[Dict[str, Any]], idx: float):
+    def _delete(videos: List[Dict[str, Any]], selected: int | None):
         videos = list(videos)
-        i = int(idx) - 1
+        if selected is None:
+            return videos, _videos_to_rows(videos), None
+        i = int(selected) - 1
         if i < 0 or i >= len(videos):
-            return videos, _videos_to_rows(videos)
+            return videos, _videos_to_rows(videos), selected
         videos.pop(i)
-        return videos, _videos_to_rows(videos)
+        if not videos:
+            new_selected = None
+        else:
+            new_selected = min(i + 1, len(videos))
+        return videos, _videos_to_rows(videos), new_selected
 
     def _clear():
-        return [], []
+        return [], [], None
 
     def _run(videos: List[Dict[str, Any]], out_dir_value: str | None):
         """执行合并并返回（输出视频路径, 状态文案）。"""
@@ -154,7 +162,11 @@ def build_merge_tab(config: AppConfig) -> None:
     file_explorer.change(_normalize_selected_file, inputs=[file_explorer], outputs=[selected_file_path])
     file_explorer.change(_default_out_dir_from_file, inputs=[file_explorer], outputs=[output_dir])
 
-    add_btn.click(_add, inputs=[selected_file_path, state_videos], outputs=[state_videos, videos_df, output_dir])
+    add_btn.click(
+        _add,
+        inputs=[selected_file_path, state_videos],
+        outputs=[state_videos, videos_df, output_dir, state_selected],
+    )
 
     def _select_row(evt: gr.SelectData):
         try:
@@ -162,11 +174,11 @@ def build_merge_tab(config: AppConfig) -> None:
         except Exception:  # noqa: BLE001
             return 1
 
-    videos_df.select(_select_row, inputs=None, outputs=[idx_box])
+    videos_df.select(_select_row, inputs=None, outputs=[state_selected])
 
-    up_btn.click(lambda vids, idx: _move(vids, idx, -1), inputs=[state_videos, idx_box], outputs=[state_videos, videos_df])
-    down_btn.click(lambda vids, idx: _move(vids, idx, 1), inputs=[state_videos, idx_box], outputs=[state_videos, videos_df])
-    del_btn.click(_delete, inputs=[state_videos, idx_box], outputs=[state_videos, videos_df])
-    clear_btn.click(_clear, outputs=[state_videos, videos_df])
+    up_btn.click(lambda vids, sel: _move(vids, sel, -1), inputs=[state_videos, state_selected], outputs=[state_videos, videos_df, state_selected])
+    down_btn.click(lambda vids, sel: _move(vids, sel, 1), inputs=[state_videos, state_selected], outputs=[state_videos, videos_df, state_selected])
+    del_btn.click(_delete, inputs=[state_videos, state_selected], outputs=[state_videos, videos_df, state_selected])
+    clear_btn.click(_clear, outputs=[state_videos, videos_df, state_selected])
 
     run_btn.click(_run, inputs=[state_videos, output_dir], outputs=[output_video, status_text])
