@@ -6,6 +6,7 @@ from __future__ import annotations
 """
 
 import os
+import subprocess
 import tempfile
 import time
 from typing import Any, Dict, List, Tuple
@@ -28,6 +29,45 @@ def build_fast_clip_tab(config: AppConfig) -> None:
 
     state_segments = gr.State([])  # List[Dict]
     media_root_abs = os.path.abspath(config.media_root)
+    max_inline_preview_mb = os.environ.get("QUICLIP_MAX_INLINE_PREVIEW_MB", "50").strip()
+    try:
+        max_inline_preview_bytes = max(int(max_inline_preview_mb), 0) * 1024 * 1024
+    except Exception:  # noqa: BLE001
+        max_inline_preview_bytes = 200 * 1024 * 1024
+
+    preview_artifacts: List[str] = []
+
+    def _get_file_size(path: str) -> int | None:
+        try:
+            return int(os.path.getsize(path))
+        except OSError:
+            return None
+
+    def _format_size(size_bytes: int | None) -> str:
+        if size_bytes is None:
+            return "未知"
+        mb = size_bytes / (1024 * 1024)
+        if mb < 1024:
+            return f"{mb:.1f} MB"
+        gb = mb / 1024
+        return f"{gb:.2f} GB"
+
+    def _prune_preview_artifacts(keep_last: int = 40) -> None:
+        nonlocal preview_artifacts
+        if len(preview_artifacts) <= keep_last:
+            return
+        to_delete = preview_artifacts[:-keep_last]
+        preview_artifacts = preview_artifacts[-keep_last:]
+        for p in to_delete:
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+            try:
+                d = os.path.dirname(p)
+                os.rmdir(d)
+            except OSError:
+                pass
 
     def _resolve_selected_path(path_value: str | None) -> str | None:
         """校验并解析 FileExplorer 选择的路径，返回绝对路径。"""
@@ -180,14 +220,22 @@ def build_fast_clip_tab(config: AppConfig) -> None:
                 "+faststart",
                 out_path,
             ]
-            import subprocess
-
             p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             if p.returncode != 0:
                 return None
+            preview_artifacts.append(out_path)
+            _prune_preview_artifacts()
             return out_path
         except Exception:  # noqa: BLE001
             return None
+
+    def _pick_video_preview(path: str, duration_seconds: float) -> tuple[str | None, str]:
+        size_bytes = _get_file_size(path)
+        if size_bytes is not None and size_bytes <= max_inline_preview_bytes:
+            return path, "原视频"
+        end = min(max(float(duration_seconds), 0.0), 5.0)
+        preview = _make_preview_clip(path, 0.0, end)
+        return preview, "前 5 秒预览"
 
     def _load_video_for_range(path_value: str | None, out_dir_value: str | None):
         path = _resolve_selected_path(path_value)
@@ -200,10 +248,17 @@ def build_fast_clip_tab(config: AppConfig) -> None:
             return None, f"**错误**：读取视频信息失败：{e}", gr.update(), _safe_dir(out_dir_value)
 
         rel_label = os.path.relpath(path, media_root_abs)
-        md = f"**文件**：`{rel_label}`  \n**时长**：{meta.duration_seconds:.3f} 秒"
+        size_bytes = _get_file_size(path)
+        video_value, preview_mode = _pick_video_preview(path, meta.duration_seconds)
+        md = (
+            f"**文件**：`{rel_label}`  \n"
+            f"**大小**：{_format_size(size_bytes)}  \n"
+            f"**时长**：{meta.duration_seconds:.3f} 秒  \n"
+            f"**预览**：{preview_mode}"
+        )
         max_v = max(meta.duration_seconds, 0.1)
         range_update = gr.update(minimum=0, maximum=max_v, value=(0, min(meta.duration_seconds, 5.0)))
-        return path, md, range_update, _safe_dir(os.path.dirname(path))
+        return video_value, md, range_update, _safe_dir(os.path.dirname(path))
 
     def _load_video_for_sliders(path_value: str | None, out_dir_value: str | None):
         path = _resolve_selected_path(path_value)
@@ -216,11 +271,18 @@ def build_fast_clip_tab(config: AppConfig) -> None:
             return None, f"**错误**：读取视频信息失败：{e}", gr.update(), gr.update(), _safe_dir(out_dir_value)
 
         rel_label = os.path.relpath(path, media_root_abs)
-        md = f"**文件**：`{rel_label}`  \n**时长**：{meta.duration_seconds:.3f} 秒"
+        size_bytes = _get_file_size(path)
+        video_value, preview_mode = _pick_video_preview(path, meta.duration_seconds)
+        md = (
+            f"**文件**：`{rel_label}`  \n"
+            f"**大小**：{_format_size(size_bytes)}  \n"
+            f"**时长**：{meta.duration_seconds:.3f} 秒  \n"
+            f"**预览**：{preview_mode}"
+        )
         max_v = max(meta.duration_seconds, 0.1)
         start_update = gr.update(minimum=0, maximum=max_v, value=0)
         end_update = gr.update(minimum=0, maximum=max_v, value=min(meta.duration_seconds, 5.0))
-        return path, md, start_update, end_update, _safe_dir(os.path.dirname(path))
+        return video_value, md, start_update, end_update, _safe_dir(os.path.dirname(path))
 
     def _default_out_dir_from_file(path_value: str | None) -> str:
         path = _resolve_selected_path(path_value)
